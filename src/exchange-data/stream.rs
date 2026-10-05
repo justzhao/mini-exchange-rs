@@ -1,6 +1,7 @@
+use std::fmt::Debug;
 use std::time::Duration;
 
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 
 const EVENT_QUEUE_SIZE: usize = 4096;
 
@@ -15,73 +16,86 @@ pub struct PingPong {
     pub ping_payload: &'static str,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct Trade {
-    pub coin: String,
-    pub side: String,
-    pub px: String,
-    pub sz: String,
-    pub time: u64,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-pub enum Event {
-    Trade(Trade),
-}
-
 pub trait Exchange: Send {
+    type Sub;
+    type Event: Clone + Send + 'static;
+
     fn ws_url(&self) -> &str;
     fn encoding(&self) -> Encoding;
     fn ping_pong(&self) -> PingPong;
-    fn decode(&self, raw: &[u8]) -> Option<Event>;
+    fn decode(&self, raw: &[u8]) -> Option<Self::Event>;
 
     fn run(
         &mut self,
-        coins: &[String],
-        events: mpsc::Sender<Event>,
+        subs: &[Self::Sub],
+        events: broadcast::Sender<Self::Event>,
     ) -> impl Future<Output = ()> + Send;
 }
 
-pub trait Handler: Send {
-    fn on_event(&mut self, event: Event);
+pub trait Handler<E>: Send {
+    fn on_event(&mut self, event: E);
 }
 
 pub struct PrintHandler;
 
-impl Handler for PrintHandler {
-    fn on_event(&mut self, event: Event) {
+impl<E: Debug + Send> Handler<E> for PrintHandler {
+    fn on_event(&mut self, event: E) {
         println!("{event:?}");
     }
 }
 
-pub struct Stream<E, H> {
+pub struct Stream<E: Exchange, H> {
     exchange: E,
-    handler: H,
-    trades: Vec<String>,
+    handler: Vec<H>,
+    subscriptions: Vec<E::Sub>,
 }
 
-impl<E: Exchange, H: Handler + 'static> Stream<E, H> {
-    pub fn new(exchange: E, handler: H) -> Self {
+impl<E, H> Stream<E, H>
+where
+    E: Exchange,
+    H: Handler<E::Event> + 'static,
+{
+    pub fn new(exchange: E, handler: Vec<H>) -> Self {
         Self {
             exchange,
             handler,
-            trades: Vec::new(),
+            subscriptions: Vec::new(),
         }
     }
 
-    pub fn subscribe_trades(mut self, coin: impl Into<String>) -> Self {
-        self.trades.push(coin.into());
+    pub fn subscribe<I, S>(mut self, subscriptions: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<E::Sub>,
+    {
+        self.subscriptions
+            .extend(subscriptions.into_iter().map(Into::into));
         self
     }
 
     pub async fn run(mut self) {
-        let (tx, mut rx) = mpsc::channel(EVENT_QUEUE_SIZE);
-        let mut handler = self.handler;
-        tokio::spawn(async move {
-            while let Some(event) = rx.recv().await {
-                handler.on_event(event);
-            }
-        });
-        self.exchange.run(&self.trades, tx).await;
+        let (tx, _rx) = broadcast::channel::<E::Event>(EVENT_QUEUE_SIZE);
+        let handlers = self.handler;
+
+        for mut handler in handlers {
+            let mut rx = tx.subscribe();
+            tokio::spawn(async move {
+                loop {
+                    match rx.recv().await {
+                        Ok(event) => {
+                            handler.on_event(event);
+                        }
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            eprintln!("[警告] 某 Handler 处理太慢，漏掉了 {} 条事件", skipped);
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+
+        self.exchange.run(&self.subscriptions, tx).await;
     }
 }

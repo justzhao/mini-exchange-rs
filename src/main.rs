@@ -8,8 +8,8 @@ use exchange_data::stream::{PrintHandler, Stream};
 async fn main() {
     println!("exchange start");
 
-    Stream::new(Hyperliquid::mainnet(), PrintHandler)
-        .subscribe_trades("BTC")
+    Stream::new(Hyperliquid::mainnet(),  vec![PrintHandler])
+        .subscribe( [("ETH", "l2Book")])
         .run()
         .await;
 }
