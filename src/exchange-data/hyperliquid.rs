@@ -8,6 +8,12 @@ use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
 use super::stream::{Encoding, Exchange, PingPong};
 
+use crate::exchange_data::books::localbook::BookSnapshot;
+use crate::exchange_data::books::bookhandler::BookEvent;
+
+
+
+
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -37,6 +43,32 @@ pub struct L2Book {
     pub levels: [Vec<BookLevel>; 2],
 }
 
+
+impl BookSnapshot for L2Book { 
+    fn coin(&self) -> &str {
+        &self.coin
+    }
+    fn time(&self) -> u64 {
+        self.time
+    }
+    fn bids(&self) -> impl Iterator<Item = (f64, f64, u32)> {
+        self.levels[0].iter().filter_map(parse_level)
+    }
+    fn asks(&self) -> impl Iterator<Item = (f64, f64, u32)> {
+        self.levels[1].iter().filter_map(parse_level)
+    }
+
+    
+}
+
+fn parse_level(level: &BookLevel) -> Option<(f64, f64, u32)> {
+    Some((
+        level.px.parse().ok()?,
+        level.sz.parse().ok()?,
+        level.n,
+    ))
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub enum Event {
     Trade(Trade),
@@ -53,6 +85,16 @@ impl From<(&str, &str)> for HlSub {
         Self {
             coin: coin.into(),
             kind: kind.into(),
+        }
+    }
+}
+
+impl BookEvent for Event {
+    type Snap = L2Book;
+    fn as_book(&self) -> Option<&L2Book> {
+        match self {
+            Event::L2Book(book) => Some(book),
+            Event::Trade(_) => None,
         }
     }
 }
