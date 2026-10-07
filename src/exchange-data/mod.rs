@@ -2,3 +2,8 @@ pub mod hyperliquid;
 pub mod stream;
 pub mod books;
 pub mod apphandler;
+pub mod features;
+pub mod signals;
+pub mod evals;
+pub mod records;
+pub mod engine;

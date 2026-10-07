@@ -1,16 +1,18 @@
 use super::books::bookhandler::{BookEvent, BookHandler};
 use super::stream::{Handler, PrintHandler};
+use crate::exchange_data::engine::ExecutionEngine;
 
-pub enum AppHandler {
+pub enum AppHandler<Ex: ExecutionEngine> {
     Print(PrintHandler),
-    Book(BookHandler),
+    Book(BookHandler<Ex>),
 }
 
-impl<E> Handler<E> for AppHandler
+impl<Ev, Ex> Handler<Ev> for AppHandler<Ex>
 where
-    E: BookEvent + std::fmt::Debug + Send,
+    Ev: BookEvent + std::fmt::Debug + Send,
+    Ex: ExecutionEngine,
 {
-    fn on_event(&mut self, event: E) {
+    fn on_event(&mut self, event: Ev) {
         match self {
             Self::Print(h) => h.on_event(event),
             Self::Book(h) => h.on_event(event),

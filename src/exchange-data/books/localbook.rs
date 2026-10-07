@@ -20,7 +20,7 @@ pub trait BookSnapshot {
 
 
 pub struct Level {
-    sz: f64,
+    pub(crate) sz: f64,
     n: u32,
 }
 
@@ -33,6 +33,14 @@ impl LocalBook {
             bids: BTreeMap::new(),
             asks: BTreeMap::new(),
         }
+    }
+
+    pub fn coin(&self) -> &str {
+        &self.coin
+    }
+
+    pub fn time(&self) -> u64 {
+        self.time
     }
     
     pub fn rebuild_book(&mut self, snap: &impl BookSnapshot) {
@@ -74,6 +82,30 @@ impl LocalBook {
         let (bid, _) = self.best_bid()?;
         let (ask, _) = self.best_ask()?;
         Some((bid + ask) / 2.0)
+    }
+    pub fn imbalance(&self) -> Option<f64>{
+
+        let(_,bid) =self.best_bid()?;
+        let(_,ask) =self.best_ask()?;
+        let qb = bid.sz;
+        let qa = ask.sz;
+        let qsum =  qa+qb;
+        if qsum == 0.0{
+            return None;
+        }
+        Some((qb-qa)/qsum)        
+    }
+
+    pub fn microprice(&self) -> Option<f64>{
+        let(pb, bid) = self.best_bid()?;
+        let(pa, ask) = self.best_ask()?;
+        let qb = bid.sz;
+        let qa = ask.sz;
+        let qsum =  qa + qb;
+        if qsum == 0.0{
+            return None;
+        }
+        Some( (qa*pb + qb*pa )/ qsum )
     }
     
 }
