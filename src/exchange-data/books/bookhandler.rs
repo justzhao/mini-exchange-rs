@@ -1,4 +1,4 @@
-use std::f32::consts::E;
+
 
 use tokio::sync::mpsc;
 
@@ -11,6 +11,7 @@ use crate::exchange_data::records::recorder;
 use crate::exchange_data::signals::orderbooksignal::OrderBookSignal;
 use crate::exchange_data::stream::Handler;
 use crate::exchange_data::engine::ExecutionEngine;
+use crate::exchange_data::risk::riskmanger::RiskManager;
 
 const RECORD_QUEUE_SIZE: usize = 4096;
 
@@ -18,11 +19,12 @@ pub struct BookHandler<E: ExecutionEngine> {
     book: LocalBook,
     eval: SignalEvaluator,
     record_tx: mpsc::Sender<MarketRecord>,
-    exec:E 
+    exec:E,
+    risk:RiskManager,
 }
 
 impl<E: ExecutionEngine> BookHandler<E> {
-    pub fn new(coin: impl Into<String>,exec: E) -> Self {
+    pub fn new(coin: impl Into<String>,exec: E,risk:RiskManager) -> Self {
         let (record_tx, record_rx) = mpsc::channel(RECORD_QUEUE_SIZE);
         recorder::spawn(record_rx);
         Self {
@@ -30,6 +32,7 @@ impl<E: ExecutionEngine> BookHandler<E> {
             eval: SignalEvaluator::new(),
             record_tx,
             exec,
+            risk,
         }
     } 
 }
@@ -58,9 +61,24 @@ impl<Ev:BookEvent, Eng:ExecutionEngine> Handler<Ev> for BookHandler<Eng> {
                     eprintln!("[警告] record queue full or closed: {err}");
                 }
             }
+
             if let (Some((bid, _)), Some((ask, _))) = (self.book.best_bid(), self.book.best_ask()) {
-                self.exec.on_signal(sig.side, bid, ask, self.book.time());
+                let px = (bid + ask) / 2.0;
+                match self.risk.check(
+                    sig.side,
+                    self.exec.order_qty(),
+                    self.exec.position_qty(),
+                    px,
+                ) {
+                    Ok(()) => self.exec.on_signal(sig.side, bid, ask, self.book.time()),
+                    Err(e) => eprintln!("[risk] reject {:?}", e),
+                }
             }
+
+
+            // if let (Some((bid, _)), Some((ask, _))) = (self.book.best_bid(), self.book.best_ask()) {
+            //     self.exec.on_signal(sig.side, bid, ask, self.book.time());
+            // }
         }
     }
 }
