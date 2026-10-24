@@ -1,9 +1,9 @@
-use crate::exchange_data::signals::orderbooksignal::Side;
+use crate::exchange_data::signals::orderbooksignal::SignalSide;
 #[derive(Clone, Copy)]
 struct PendingEval {
     t0_ms: u64,      // 信号时的 book.time（HL 是交易所时间）
     mid0: f64,
-    side: Side,
+    side: SignalSide,
     // 哪些 horizon 已经结算过
     done_100ms: bool,
     done_1s: bool,
@@ -23,8 +23,8 @@ impl SignalEvaluator {
         Self { pending: Vec::new() }
     }
 
-    pub fn push(&mut self, t0_ms: u64, mid0: f64, side: Side) {
-        if matches!(side, Side::Holder) {
+    pub fn push(&mut self, t0_ms: u64, mid0: f64, side: SignalSide) {
+        if matches!(side, SignalSide::Holder) {
             return; // 观望不算信号，不评估
         }
         self.pending.push(PendingEval {

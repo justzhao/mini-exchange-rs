@@ -11,7 +11,10 @@ use super::stream::{Encoding, Exchange, PingPong};
 use crate::exchange_data::books::localbook::BookSnapshot;
 use crate::exchange_data::books::bookhandler::BookEvent;
 
-
+use crate::exchange_data::types::{
+    price::Price,
+    quantity::Quantity,
+};
 
 
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -51,22 +54,37 @@ impl BookSnapshot for L2Book {
     fn time(&self) -> u64 {
         self.time
     }
-    fn bids(&self) -> impl Iterator<Item = (f64, f64, u32)> {
-        self.levels[0].iter().filter_map(parse_level)
+    fn bids(&self) -> Result<Vec<(Price, Quantity, u32)>, String>{
+        
+        self.levels[0].iter().map(parse_level).collect()
+    
     }
-    fn asks(&self) -> impl Iterator<Item = (f64, f64, u32)> {
-        self.levels[1].iter().filter_map(parse_level)
+    fn asks(&self) -> Result<Vec<(Price, Quantity, u32)>, String>{
+        self.levels[1].iter().map(parse_level).collect()
     }
 
     
 }
 
-fn parse_level(level: &BookLevel) -> Option<(f64, f64, u32)> {
-    Some((
-        level.px.parse().ok()?,
-        level.sz.parse().ok()?,
-        level.n,
-    ))
+fn parse_level(level: &BookLevel) -> Result<(Price, Quantity, u32), String> {
+
+    let price = level.px.parse::<Price>()
+        .map_err(|err| {
+            format!("invalid price {:?}: {err:?}", level.px)
+        })?;
+
+    let quantity = level.sz.parse::<Quantity>()
+        .map_err(|err| {
+            format!("invalid quantity {:?}: {err:?}", level.sz)
+        })?;
+
+    Ok((price, quantity, level.n))
+
+    // Some((
+    //     level.px.parse().ok()?,
+    //     level.sz.parse().ok()?,
+    //     level.n,
+    // ))
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

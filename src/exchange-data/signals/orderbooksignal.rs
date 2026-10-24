@@ -1,11 +1,12 @@
 use crate::exchange_data::features::orderbookfeature::OrderBookFeature;
 pub struct OrderBookSignal{
-    pub side: Side,
+    pub side: SignalSide,
     pub strength: f64, // 可用 |imbalance|，方便以后过滤
 }
 
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Side {
+pub enum SignalSide {
     Buy,
     Sell,
     Holder,
@@ -22,14 +23,14 @@ impl OrderBookSignal {
 
         let side = if imb > thr &&  lift > 0.0 {
 
-            Side::Buy
+            SignalSide::Buy
 
         } else if imb < -thr && lift < 0.0 {
             
-            Side::Sell
+            SignalSide::Sell
         } else {
             
-            Side::Holder
+            SignalSide::Holder
         };
         Self {
             side,

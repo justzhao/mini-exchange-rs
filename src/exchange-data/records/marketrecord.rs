@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::exchange_data::books::localbook::LocalBook;
 use crate::exchange_data::features::orderbookfeature::OrderBookFeature;
-use crate::exchange_data::signals::orderbooksignal::{OrderBookSignal, Side};
+use crate::exchange_data::signals::orderbooksignal::{OrderBookSignal, SignalSide};
 
 pub type Price = f64;
 pub type Quantity = f64;
@@ -15,12 +15,12 @@ pub enum Signal {
     Holder,
 }
 
-impl From<Side> for Signal {
-    fn from(side: Side) -> Self {
+impl From<SignalSide> for Signal {
+    fn from(side: SignalSide) -> Self {
         match side {
-            Side::Buy => Self::Buy,
-            Side::Sell => Self::Sell,
-            Side::Holder => Self::Holder,
+            SignalSide::Buy => Self::Buy,
+            SignalSide::Sell => Self::Sell,
+            SignalSide::Holder => Self::Holder,
         }
     }
 }
@@ -29,10 +29,10 @@ impl From<Side> for Signal {
 pub struct MarketRecord {
     pub timestamp: u64,
     pub symbol: String,
-    pub best_bid: Price,
-    pub best_ask: Price,
-    pub bid_qty: Quantity,
-    pub ask_qty: Quantity,
+    pub best_bid: String,
+    pub best_ask: String,
+    pub bid_qty: String,
+    pub ask_qty: String,
     pub spread: Price,
     pub mid_price: Price,
     pub imbalance: f64,
@@ -51,10 +51,10 @@ impl MarketRecord {
         Some(Self {
             timestamp: book.time(),
             symbol: book.coin().to_string(),
-            best_bid,
-            best_ask,
-            bid_qty: bid_lvl.sz,
-            ask_qty: ask_lvl.sz,
+            best_bid: best_bid.to_string(),
+            best_ask: best_ask.to_string(),
+            bid_qty: bid_lvl.sz.to_string(),
+            ask_qty: ask_lvl.sz.to_string(),
             spread: feat.spread,
             mid_price: feat.mid,
             imbalance: feat.imbalance,
