@@ -1,4 +1,6 @@
 use crate::exchange_data::features::orderbookfeature::OrderBookFeature;
+
+#[derive(Debug, Clone, Copy)]
 pub struct OrderBookSignal{
     pub side: SignalSide,
     pub strength: f64, // 可用 |imbalance|，方便以后过滤

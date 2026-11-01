@@ -5,10 +5,12 @@ use crate::exchange_data::types::{
     quantity::Quantity,
 };
 use crate::exchange_data::engine::Position;
+#[derive(Clone)]
 pub struct RiskManager {
     cfg: RiskConfig,
 }
 
+#[derive(Clone)]
 pub struct RiskConfig {
     pub max_order_size: Quantity,  // 单笔 qty 上限，如 0.1
     pub max_position: Quantity,    // 成交后 |仓位数量| 上限，如 0.1

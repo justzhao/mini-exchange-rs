@@ -5,12 +5,12 @@ use tokio::net::TcpStream;
 use tokio::sync::broadcast;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
-
+use tokio::time::{timeout};
 use super::stream::{Encoding, Exchange, PingPong};
 
 use crate::exchange_data::books::localbook::BookSnapshot;
 use crate::exchange_data::books::bookhandler::BookEvent;
-
+use std::collections::HashSet;
 use crate::exchange_data::types::{
     price::Price,
     quantity::Quantity,
@@ -32,14 +32,14 @@ pub struct Trade {
     pub time: u64,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize,serde::Serialize)]
 pub struct BookLevel {
     pub px: String,
     pub sz: String,
     pub n: u32,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize,serde::Serialize)]
 pub struct L2Book {
     pub coin: String,
     pub time: u64,
@@ -93,9 +93,16 @@ pub enum Event {
     L2Book(L2Book),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Deserialize)]
 pub struct HlSub {
+    #[serde(rename = "type")]
     pub kind: String,
     pub coin: String,
+}
+#[derive(Debug, serde::Deserialize)]
+struct SubscriptionResponse {
+    method: String,
+    subscription: HlSub,
 }
 
 impl From<(&str, &str)> for HlSub {
@@ -150,7 +157,13 @@ impl Hyperliquid {
 
     async fn connect(&mut self) -> Result<(), WsError> {
         self.ws = None;
-        let (ws, _) = connect_async(&self.ws_url).await?;
+       // let (ws, _) = connect_async(&self.ws_url).await?;
+       let (ws, _) = timeout(
+        Duration::from_secs(10),
+        connect_async(&self.ws_url),
+        )
+         .await??;
+        
         self.ws = Some(ws);
         Ok(())
     }
@@ -159,38 +172,118 @@ impl Hyperliquid {
         self.connect().await?;
         let ws = self.ws.as_mut().ok_or("websocket missing")?;
         for sub in subs {
-            ws.send(Message::Text(
+            
+            let message = Message::Text(
                 Self::subscribe_payload(&sub.kind, &sub.coin).into(),
-            ))
-            .await?;
+            );
+            timeout(
+                Duration::from_secs(10),
+                ws.send(message),
+            )
+            .await??;
+
         }
         Ok(())
     }
 
-    async fn read_loop(&mut self, events: &broadcast::Sender<Event>) -> Result<(), WsError> {
+    async fn read_loop(&mut self, subs: &[HlSub], events: &broadcast::Sender<Event>) -> Result<(), WsError> {
+        let mut pending: HashSet<HlSub> =subs.iter().cloned().collect();
         let ping = self.ping_pong();
         let mut ticker = tokio::time::interval(ping.interval);
         let ws = self.ws.take().ok_or("websocket missing")?;
         let (mut write, mut read) = ws.split();
+        let idle_timeout = Duration::from_secs(60);
+        let idle_timer = tokio::time::sleep(idle_timeout);
+        tokio::pin!(idle_timer);
+
+        let subscription_timer =
+        tokio::time::sleep(Duration::from_secs(10));
+        tokio::pin!(subscription_timer);
+       
 
         loop {
             tokio::select! {
+                _ = &mut idle_timer => {
+                    return Err("60 秒未收到消息".into());
+                }
+                _ = &mut subscription_timer, if !pending.is_empty() => {
+                    return Err(
+                        format!(
+                            "subscription confirmation timed out; pending: {pending:?}"
+                        )
+                        .into()
+                    );
+                }
                 _ = ticker.tick() => {
-                    write
-                        .send(Message::Text(ping.ping_payload.into()))
-                        .await?;
+                    timeout(
+                        Duration::from_secs(10),
+                        write.send(Message::Text(ping.ping_payload.into())),
+                    )
+                    .await??;
                 }
                 msg = read.next() => {
+                    //读取超时
+                    idle_timer.as_mut().reset(
+                        tokio::time::Instant::now() + idle_timeout
+                    );
                     match msg {
                         Some(Ok(Message::Text(text))) => {
-                            if let Some(event) = self.decode(text.as_bytes()) {
-                                if let Err(err) = events.send(event) {
-                                    return Err(format!("event broadcast failed: {err}").into());
+
+                                                        // 先处理订阅确认消息。
+                            if let Ok(envelope) = serde_json::from_str::<Envelope>(&text) {
+                                if envelope.channel == "subscriptionResponse" {
+                                    match serde_json::from_value::<SubscriptionResponse>(
+                                        envelope.data,
+                                    ) {
+                                        Ok(response) => {
+                                            if response.method == "subscribe" {
+                                                let removed =
+                                                    pending.remove(&response.subscription);
+
+                                                if removed {
+                                                    println!(
+                                                        "[subscription] confirmed: {}/{}",
+                                                        response.subscription.coin,
+                                                        response.subscription.kind,
+                                                    );
+
+                                                    if pending.is_empty() {
+                                                        println!("[subscription] all confirmed");
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(err) => {
+                                            eprintln!("[subscription] invalid response: {err}");
+                                        }
+                                    }
+
+                                    continue;
                                 }
                             }
+
+                            match   self.decode(text.as_bytes()){
+                                 Ok(deocdes)=>{
+
+                                    for event in deocdes {
+                                        events.send(event).map_err(|err| {
+                                            format!("event broadcast failed: {err}")
+                                        })?;
+                                    }
+
+                                 } ,
+                                 Err(err) =>{
+                                    eprintln!("decode error {err:?}")
+                                 }  
+
+                            }  
                         }
                         Some(Ok(Message::Ping(payload))) => {
-                            write.send(Message::Pong(payload)).await?;
+                            timeout(
+                                Duration::from_secs(10),
+                                write.send(Message::Pong(payload)),
+                            )
+                            .await??;
                         }
                         Some(Ok(Message::Close(frame))) => {
                             return Err(format!("server closed: {frame:?}").into());
@@ -228,9 +321,14 @@ impl Exchange for Hyperliquid {
         self.ping_pong
     }
 
-    fn decode(&self, raw: &[u8]) -> Option<Self::Event> {
+    fn decode(&self, raw: &[u8]) -> Result<Vec<Self::Event>, serde_json::Error>{
+        
         match self.encoding {
-            Encoding::Json => decode_json(raw),
+            Encoding::Json =>{
+                 decode_json(raw)
+             }
+
+
         }
     }
 
@@ -253,7 +351,7 @@ impl Exchange for Hyperliquid {
                 }
             }
 
-            if let Err(err) = self.read_loop(&events).await {
+            if let Err(err) = self.read_loop(subs,&events).await {
                 eprintln!("websocket disconnected: {err}");
             }
             self.ws = None;
@@ -263,17 +361,66 @@ impl Exchange for Hyperliquid {
     }
 }
 
-fn decode_json(raw: &[u8]) -> Option<Event> {
-    let envelope: Envelope = serde_json::from_slice(raw).ok()?;
+fn decode_json(raw: &[u8]) -> Result<Vec<Event>, serde_json::Error>{
+    let envelope: Envelope = serde_json::from_slice(raw)?;
     match envelope.channel.as_str() {
         "trades" => {
-            let trades: Vec<Trade> = serde_json::from_value(envelope.data).ok()?;
-            trades.into_iter().next().map(Event::Trade)
+            let trades: Vec<Trade> = serde_json::from_value(envelope.data)?;
+         
+            let events=  trades.into_iter().map(Event::Trade).collect::<Vec<Event>>();
+
+            Ok(events)
         }
         "l2Book" => {
-            let book: L2Book = serde_json::from_value(envelope.data).ok()?;
-            Some(Event::L2Book(book))
+            let book: L2Book = serde_json::from_value(envelope.data)?;
+            Ok(vec![Event::L2Book(book)])
         }
-        _ => None,
+        "subscriptionResponse" => {
+            let response: SubscriptionResponse =
+            serde_json::from_value(envelope.data)?;
+    
+        println!(
+            "[subscription] method={} coin={} kind={}",
+            response.method,
+            response.subscription.coin,
+            response.subscription.kind,
+        );
+
+            Ok(vec![])
+        }
+        _ => Ok(vec![]),
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_all_trades_in_order() {
+        let raw = br#"{
+            "channel": "trades",
+            "data": [
+                {"coin":"ETH","side":"B","px":"3000","sz":"0.01","time":1},
+                {"coin":"ETH","side":"A","px":"3001","sz":"0.02","time":2},
+                {"coin":"ETH","side":"B","px":"3002","sz":"0.03","time":3}
+            ]
+        }"#;
+
+        let events = decode_json(raw).expect("成交消息应解析成功");
+
+        assert_eq!(events.len(), 3);
+
+        for (event, expected_price) in
+            events.iter().zip(["3000", "3001", "3002"])
+        {
+            match event {
+                Event::Trade(trade) => {
+                    assert_eq!(trade.px.as_str(), expected_price);
+                }
+                other => panic!("预期 Trade，实际为 {other:?}"),
+            }
+        }
     }
 }

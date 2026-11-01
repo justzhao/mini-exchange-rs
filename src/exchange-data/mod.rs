@@ -9,3 +9,6 @@ pub mod records;
 pub mod engine;
 pub mod risk;
 pub mod types;
+pub mod replay;
+
+pub mod trading;

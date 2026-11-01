@@ -3,7 +3,7 @@ use crate::exchange_data::types::money::Money;
 use crate::exchange_data::types::price::Price;
 use crate::exchange_data::types::quantity::Quantity;
 // fill.rs
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fill {
     pub order_id: u64,
     pub price: Price,

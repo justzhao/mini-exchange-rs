@@ -1,7 +1,7 @@
 use crate::exchange_data::types::price::Price;
 use crate::exchange_data::types::quantity::Quantity;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Order {
     pub id: u64,
     pub status: OrderStatus,

@@ -4,8 +4,7 @@ use crate::exchange_data::books::localbook::LocalBook;
 use crate::exchange_data::features::orderbookfeature::OrderBookFeature;
 use crate::exchange_data::signals::orderbooksignal::{OrderBookSignal, SignalSide};
 
-pub type Price = f64;
-pub type Quantity = f64;
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -33,10 +32,10 @@ pub struct MarketRecord {
     pub best_ask: String,
     pub bid_qty: String,
     pub ask_qty: String,
-    pub spread: Price,
-    pub mid_price: Price,
+    pub spread: f64,
+    pub mid_price: f64,
     pub imbalance: f64,
-    pub microprice: Price,
+    pub microprice: f64,
     pub signal: Signal,
 }
 

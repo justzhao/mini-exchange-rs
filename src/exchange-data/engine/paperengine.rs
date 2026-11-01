@@ -4,6 +4,7 @@ use crate::exchange_data::engine::{ExecutionEngine, Position};
 use crate::exchange_data::signals::orderbooksignal::SignalSide;
 use crate::exchange_data::types::{money::Money, price::Price, quantity::Quantity};
 
+#[derive(Clone)]
 pub struct PaperEngine {
     qty: Quantity,
     fee_bps: u32,
@@ -14,6 +15,7 @@ pub struct PaperEngine {
     next_order_id: u64,
     fills: Vec<Fill>,
     orders: Vec<Order>,
+    slippage_ticks: u32,
 }
 
 #[derive(Debug)]
@@ -24,9 +26,11 @@ pub enum PaperEngineConfigError {
 pub enum QuoteError {
     NoCross,
 }
+
 #[derive(Debug)]
 pub enum CalculationError {
     Overflow,
+    InvalidExecutionPrice,
 }
 
 fn money_from_raw(raw: i128) -> Result<Money, CalculationError> {
@@ -99,6 +103,7 @@ impl PaperEngine {
             next_order_id: 0,
             fills: Vec::new(),
             orders: Vec::new(),
+            slippage_ticks: 0,
         })
     }
 
@@ -153,12 +158,12 @@ impl PaperEngine {
         ask: Price,
         time: u64,
     ) -> Result<(), CalculationError> {
-        let px = match side {
-            OrderSide::Buy => ask,
-            OrderSide::Sell => bid,
-        };
+       
+        let px = self.execution_price(side, bid, ask)?;
         let mut order = self.create_order(side, px, time);
-        let fill = self.fill_market(&order, bid, ask, time)?;
+        let fill = self.fill_market(&order, time)?;
+
+
         self.apply_fill(&fill)?;
         order.status = OrderStatus::Filled;
         println!(
@@ -221,15 +226,11 @@ impl PaperEngine {
     fn fill_market(
         &self,
         order: &Order,
-        bid: Price,
-        ask: Price,
         time: u64,
     ) -> Result<Fill, CalculationError> {
-        let price = match order.side {
-            OrderSide::Buy => ask,
-            OrderSide::Sell => bid,
-        };
+        let price = order.price;
         let fee = calculate_fee(price, order.qty, self.fee_bps)?;
+
         Ok(Fill {
             order_id: order.id,
             price,
@@ -319,6 +320,29 @@ impl PaperEngine {
         })?;
         money_from_raw(total)
     }
+
+    pub fn with_slippage(mut self, ticks: u32) -> Self {
+        self.slippage_ticks = ticks;
+        self
+    }
+    
+    fn execution_price(
+        &self,
+        side: OrderSide,
+        bid: Price,
+        ask: Price,
+    ) -> Result<Price, CalculationError> {
+        let slippage = i64::from(self.slippage_ticks);
+    
+        let ticks = match side {
+            OrderSide::Buy => ask.ticks().checked_add(slippage),
+            OrderSide::Sell => bid.ticks().checked_sub(slippage),
+        }
+        .ok_or(CalculationError::Overflow)?;
+    
+        Price::from_ticks(ticks)
+            .map_err(|_| CalculationError::InvalidExecutionPrice)
+    }
 }
 
 #[cfg(test)]
@@ -367,4 +391,44 @@ mod tests {
         assert_eq!(engine.realized_pnl().raw(), 0);
         assert_eq!(engine.position(), Position::Flat);
     }
+    #[test]
+fn slippage_affects_prices_fees_and_pnl() {
+    let mut engine = PaperEngine::new(
+        Quantity::from_raw(10_000), // 0.01 ETH
+        5,                        // 5 bps
+    )
+    .unwrap()
+    .with_slippage(2); // 每次成交向不利方向调整 0.02
+
+    // 开多：原 ask=3000，实际买入价=3000.02。
+    engine.on_signal(
+        SignalSide::Buy,
+        price("2999"),
+        price("3000"),
+        1,
+    );
+
+    assert_eq!(engine.position(), Position::Long);
+    assert_eq!(engine.entry_price(), Some(price("3000.02")));
+    assert_eq!(engine.orders()[0].price, price("3000.02"));
+    assert_eq!(engine.fills()[0].price, price("3000.02"));
+    assert_eq!(engine.fills()[0].fee.raw(), 1_500_010);
+
+    // 平多：原 bid=3010，实际卖出价=3009.98。
+    engine.close_position(
+        price("3010"),
+        price("3011"),
+        2,
+    );
+
+    assert_eq!(engine.position(), Position::Flat);
+    assert_eq!(engine.orders().len(), 2);
+    assert_eq!(engine.fills().len(), 2);
+    assert_eq!(engine.orders()[1].price, price("3009.98"));
+    assert_eq!(engine.fills()[1].price, price("3009.98"));
+    assert_eq!(engine.fills()[1].fee.raw(), 1_504_990);
+
+    assert_eq!(engine.total_fees().unwrap().raw(), 3_005_000);
+    assert_eq!(engine.realized_pnl().raw(), 6_955_000);
+}
 }
